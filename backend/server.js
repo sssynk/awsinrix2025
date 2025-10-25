@@ -1,11 +1,18 @@
 require('dotenv').config();
 const express = require('express');
 const session = require('express-session');
+const cors = require('cors');
 const { Issuer, generators } = require('openid-client');
 const { initializeDatabase, seedConnections } = require('./db');
 const connectionsRouter = require('./routes/connections');
 
 const app = express();
+
+// CORS configuration for Next.js frontend
+app.use(cors({
+    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+    credentials: true
+}));
 
 // Body parser middleware
 app.use(express.json());
@@ -57,6 +64,78 @@ const checkAuth = (req, res, next) => {
     next();
 };
 
+// API Routes for Next.js frontend
+// Get current user info
+app.get('/api/user', checkAuth, (req, res) => {
+    if (req.isAuthenticated) {
+        res.json({
+            success: true,
+            user: req.session.userInfo
+        });
+    } else {
+        res.status(401).json({
+            success: false,
+            message: 'Not authenticated'
+        });
+    }
+});
+
+// Check authentication status
+app.get('/api/auth/status', checkAuth, (req, res) => {
+    res.json({
+        success: true,
+        authenticated: req.isAuthenticated,
+        user: req.isAuthenticated ? req.session.userInfo : null
+    });
+});
+
+// Chat endpoint (placeholder for multi-agent system)
+app.post('/api/chat', checkAuth, (req, res) => {
+    if (!req.isAuthenticated) {
+        return res.status(401).json({
+            success: false,
+            message: 'Authentication required'
+        });
+    }
+
+    const { message, context, selectedAgents } = req.body;
+    
+    // TODO: Implement multi-agent chat logic
+    // For now, return a mock response
+    res.json({
+        success: true,
+        response: {
+            id: Date.now().toString(),
+            message: `Received your message: "${message}". Multi-agent processing will be implemented here.`,
+            agents: selectedAgents || ['default'],
+            timestamp: new Date().toISOString()
+        }
+    });
+});
+
+// Get available integrations
+app.get('/api/integrations', checkAuth, (req, res) => {
+    if (!req.isAuthenticated) {
+        return res.status(401).json({
+            success: false,
+            message: 'Authentication required'
+        });
+    }
+
+    // TODO: Get actual integration status from database
+    const integrations = [
+        { id: 'jira', name: 'Jira', connected: false, icon: 'jira' },
+        { id: 'asana', name: 'Asana', connected: false, icon: 'asana' },
+        { id: 'hubspot', name: 'Hubspot', connected: false, icon: 'hubspot' },
+        { id: 'linear', name: 'Linear', connected: false, icon: 'linear' }
+    ];
+
+    res.json({
+        success: true,
+        integrations
+    });
+});
+
 // Mount connections router
 app.use('/connections', connectionsRouter);
 
@@ -91,7 +170,7 @@ app.get('/callback', async (req, res) => {
     try {
         const params = client.callbackParams(req);
         const tokenSet = await client.callback(
-            'http://localhost:3003/callback',
+            `${process.env.BASE_URL}/callback`,
             params,
             {
                 nonce: req.session.nonce,
@@ -102,10 +181,13 @@ app.get('/callback', async (req, res) => {
         const userInfo = await client.userinfo(tokenSet.access_token);
         req.session.userInfo = userInfo;
 
-        res.redirect('/');
+        // Redirect to Next.js frontend after successful login
+        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+        res.redirect(`${frontendUrl}/dashboard`);
     } catch (err) {
         console.error('Callback error:', err);
-        res.redirect('/');
+        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+        res.redirect(frontendUrl);
     }
 });
 
