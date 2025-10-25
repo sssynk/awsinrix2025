@@ -1,0 +1,45 @@
+# Asana MCP AWS Core Integration Environment Variables
+# Copy this file to .env and update with your actual values
+
+# Environment
+ENVIRONMENT=development
+
+# AWS Configuration
+AWS_REGION=us-east-1
+COGNITO_USER_POOL_ID=us-east-1_VpZFVOF3q
+COGNITO_CLIENT_ID=6b84e8a5dkeq43ko0qpp28uiap
+
+# Database Configuration
+DB_HOST=database-1.cluster-cziyo8qqeu6x.us-east-1.rds.amazonaws.com
+DB_PORT=5432
+DB_NAME=asana_mcp
+DB_USER=postgres
+DB_PASSWORD=your_password_here
+DB_SECRET_NAME=rds/asana-mcp/credentials
+
+# Asana MCP Configuration
+ASANA_CLIENT_ID=your_asana_client_id_here
+ASANA_CLIENT_SECRET=your_asana_client_secret_here
+ASANA_MCP_URL=https://mcp.asana.com
+ASANA_REDIRECT_URI=http://localhost:3003/api/asana/callback
+
+# Server Configuration
+BACKEND_PORT=3003
+NODE_ENV=development
+
+# Logging Configuration
+LOG_LEVEL=INFO
+LOG_FORMAT=%(asctime)s - %(name)s - %(levelname)s - %(message)s
+
+# CORS Configuration
+CORS_ORIGIN=http://localhost:3000
+CORS_CREDENTIALS=true
+
+# Session Configuration
+SESSION_SECRET=qvr7u79b2cbhokf9spqfqnqh8t8cbcnukqijboe9afkrojbll5
+SESSION_MAX_AGE=86400000
+
+# Asana MCP Features
+ASANA_ANALYTICS_ENABLED=true
+ASANA_AUDIT_LOGGING=true
+ASANA_RATE_LIMITING=true

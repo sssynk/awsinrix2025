@@ -1,6 +1,8 @@
 const express = require('express');
 const session = require('express-session');
 const { Issuer, generators } = require('openid-client');
+require('dotenv').config();
+
 const app = express();
 
 let client;
@@ -30,6 +32,10 @@ const checkAuth = (req, res, next) => {
     }
     next();
 };
+
+// Import Asana routes
+const asanaAuthRoutes = require('./routes/asana-auth');
+const asanaRoutes = require('./routes/asana');
 
 app.get('/login', (req, res) => {
     const nonce = generators.nonce();
@@ -89,9 +95,21 @@ app.get('/logout', (req, res) => {
 
 app.set('view engine', 'ejs');
 
+// Mount Asana routes
+app.use('/api/asana/auth', asanaAuthRoutes);
+app.use('/api/asana', checkAuth, asanaRoutes);
+
 // serve /auth.html at /auth
 app.get('/auth', (req, res) => {
-    res.render('auth');
+    res.render('auth', {
+        isAuthenticated: req.isAuthenticated,
+        userInfo: req.session.userInfo || null
+    });
+});
+
+// serve Asana MCP demo page
+app.get('/asana-demo', (req, res) => {
+    res.render('asana-demo');
 });
 
 app.listen(3003, () => {

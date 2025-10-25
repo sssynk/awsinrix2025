@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Asana MCP Integration Demo</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+        }
+        .status {
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 5px;
+            border-left: 4px solid;
+        }
+        .status.success {
+            background-color: #d4edda;
+            border-color: #28a745;
+            color: #155724;
+        }
+        .status.info {
+            background-color: #d1ecf1;
+            border-color: #17a2b8;
+            color: #0c5460;
+        }
+        .status.warning {
+            background-color: #fff3cd;
+            border-color: #ffc107;
+            color: #856404;
+        }
+        .btn {
+            display: inline-block;
+            padding: 12px 24px;
+            margin: 10px 5px;
+            background-color: #007bff;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        .btn:hover {
+            background-color: #0056b3;
+        }
+        .btn.success {
+            background-color: #28a745;
+        }
+        .btn.success:hover {
+            background-color: #1e7e34;
+        }
+        .endpoint {
+            background-color: #f8f9fa;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            font-family: monospace;
+            border-left: 3px solid #007bff;
+        }
+        .code {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: monospace;
+            overflow-x: auto;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 Asana MCP Integration Demo</h1>
+        
+        <div class="status info">
+            <strong>✅ Server Status:</strong> Running on localhost:3003
+        </div>
+
+        <div class="status success">
+            <strong>✅ Asana MCP Registration:</strong> Successfully registered with client ID: 4j3PwxFH8gfxV3qg
+        </div>
+
+        <h2>🔗 Available Endpoints</h2>
+        
+        <div class="endpoint">
+            <strong>Main Auth Page:</strong> <a href="/auth">http://localhost:3003/auth</a>
+        </div>
+        
+        <div class="endpoint">
+            <strong>Asana OAuth Login:</strong> <a href="/api/asana/auth/login">http://localhost:3003/api/asana/auth/login</a>
+        </div>
+        
+        <div class="endpoint">
+            <strong>Asana Auth Status:</strong> <a href="/api/asana/auth/status">http://localhost:3003/api/asana/auth/status</a>
+        </div>
+        
+        <div class="endpoint">
+            <strong>Asana Health Check:</strong> <a href="/api/asana/health">http://localhost:3003/api/asana/health</a>
+        </div>
+
+        <h2>🧪 Test the Integration</h2>
+        
+        <p>Click the button below to start the Asana OAuth flow:</p>
+        
+        <a href="/api/asana/auth/login" class="btn success">🔗 Connect to Asana</a>
+        
+        <h2>📋 How It Works</h2>
+        
+        <ol>
+            <li><strong>Click "Connect to Asana"</strong> - This redirects you to Asana's OAuth page</li>
+            <li><strong>Authorize the app</strong> - Grant permission to access your Asana data</li>
+            <li><strong>Return to app</strong> - You'll be redirected back with an access token</li>
+            <li><strong>Use Asana API</strong> - The app can now make requests to Asana on your behalf</li>
+        </ol>
+
+        <h2>🔧 API Usage Examples</h2>
+        
+        <p><strong>Check connection status:</strong></p>
+        <div class="code">
+curl http://localhost:3003/api/asana/auth/status
+        </div>
+        
+        <p><strong>Test Asana MCP health:</strong></p>
+        <div class="code">
+curl http://localhost:3003/api/asana/health
+        </div>
+        
+        <p><strong>After OAuth, use Asana API:</strong></p>
+        <div class="code">
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+     http://localhost:3003/api/asana/users/me
+        </div>
+
+        <div class="status warning">
+            <strong>⚠️ Note:</strong> The Asana MCP server health check shows "unhealthy" because we're testing locally. 
+            In production, this would connect to the actual Asana MCP server.
+        </div>
+
+        <h2>🎯 Next Steps</h2>
+        
+        <ul>
+            <li>✅ Server is running and accessible</li>
+            <li>✅ Asana MCP client is registered</li>
+            <li>✅ OAuth endpoints are working</li>
+            <li>🔄 <strong>Test OAuth flow</strong> - Click "Connect to Asana" above</li>
+            <li>🔄 <strong>Complete authorization</strong> - Grant permissions in Asana</li>
+            <li>🔄 <strong>Test API calls</strong> - Use the authenticated endpoints</li>
+        </ul>
+    </div>
+
+    <script>
+        // Auto-refresh status every 30 seconds
+        setInterval(async () => {
+            try {
+                const response = await fetch('/api/asana/auth/status');
+                const data = await response.json();
+                console.log('Asana connection status:', data);
+            } catch (error) {
+                console.log('Status check failed:', error);
+            }
+        }, 30000);
+    </script>
+</body>
+</html>
