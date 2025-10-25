@@ -1,25 +1,51 @@
+require('dotenv').config();
 const express = require('express');
 const session = require('express-session');
 const { Issuer, generators } = require('openid-client');
+const { initializeDatabase, seedConnections } = require('./db');
+const connectionsRouter = require('./routes/connections');
+
 const app = express();
+
+// Body parser middleware
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 let client;
 // Initialize OpenID Client
 async function initializeClient() {
-    const issuer = await Issuer.discover('https://cognito-idp.us-east-1.amazonaws.com/us-east-1_VpZFVOF3q');
+    const issuer = await Issuer.discover(process.env.COGNITO_ISSUER);
     client = new issuer.Client({
-        client_id: '6b84e8a5dkeq43ko0qpp28uiap',
-        client_secret: 'qvr7u79b2cbhokf9spqfqnqh8t8cbcnukqijboe9afkrojbll5',
-        redirect_uris: ['http://localhost:3003/callback'],
+        client_id: process.env.COGNITO_CLIENT_ID,
+        client_secret: process.env.COGNITO_CLIENT_SECRET,
+        redirect_uris: [`${process.env.BASE_URL}/callback`],
         response_types: ['code']
     });
 };
 initializeClient().catch(console.error);
 
+// Initialize database
+async function initializeApp() {
+    try {
+        await initializeDatabase();
+        await seedConnections();
+        console.log('✓ Application initialized successfully');
+    } catch (err) {
+        console.error('Failed to initialize application:', err);
+        process.exit(1);
+    }
+}
+initializeApp();
+
 app.use(session({
-    secret: 'qvr7u79b2cbhokf9spqfqnqh8t8cbcnukqijboe9afkrojbll5',
+    secret: process.env.SESSION_SECRET,
     resave: false,
-    saveUninitialized: false
+    saveUninitialized: false,
+    cookie: {
+        secure: process.env.NODE_ENV === 'production',
+        httpOnly: true,
+        maxAge: 24 * 60 * 60 * 1000 // 24 hours
+    }
 }));
 
 const checkAuth = (req, res, next) => {
@@ -30,6 +56,9 @@ const checkAuth = (req, res, next) => {
     }
     next();
 };
+
+// Mount connections router
+app.use('/connections', connectionsRouter);
 
 app.get('/login', (req, res) => {
     const nonce = generators.nonce();
@@ -94,6 +123,32 @@ app.get('/auth', (req, res) => {
     res.render('auth');
 });
 
-app.listen(3003, () => {
-    console.log('Server is running on port 3003');
+// Root route - show user info if authenticated
+app.get('/', checkAuth, (req, res) => {
+    if (req.isAuthenticated) {
+        res.json({
+            success: true,
+            authenticated: true,
+            user: req.session.userInfo,
+            message: 'Welcome! Use /connections endpoints to manage your integrations'
+        });
+    } else {
+        res.json({
+            success: true,
+            authenticated: false,
+            message: 'Please login at /login',
+            endpoints: {
+                login: '/login',
+                connections: '/connections (requires auth)',
+                enabled_connections: '/connections/enabled (requires auth)',
+                enable_connection: 'POST /connections/enable (requires auth)'
+            }
+        });
+    }
+});
+
+const PORT = process.env.PORT || 3003;
+app.listen(PORT, () => {
+    console.log(`✓ Server is running on port ${PORT}`);
+    console.log(`✓ Base URL: ${process.env.BASE_URL}`);
 });

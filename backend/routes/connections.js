@@ -1,0 +1,418 @@
+require('dotenv').config();
+const express = require('express');
+const router = express.Router();
+const crypto = require('crypto');
+const axios = require('axios');
+const { query } = require('../db');
+
+// Middleware to check authentication (assumes user is authenticated via Cognito)
+const requireAuth = (req, res, next) => {
+    if (!req.session.userInfo) {
+        return res.status(401).json({ error: 'Unauthorized' });
+    }
+    req.userId = req.session.userInfo.sub; // Cognito user ID
+    next();
+};
+
+// GET /connections - List ALL possible connections
+router.get('/', requireAuth, async (req, res) => {
+    try {
+        const result = await query(`
+            SELECT 
+                c.id,
+                c.name,
+                c.display_name,
+                c.category,
+                c.auth_type,
+                c.description,
+                c.icon_url,
+                EXISTS(
+                    SELECT 1 FROM user_connections uc 
+                    WHERE uc.connection_id = c.id 
+                    AND uc.user_id = $1 
+                    AND uc.enabled = true
+                ) as is_enabled
+            FROM connections c
+            ORDER BY c.category, c.display_name
+        `, [req.userId]);
+
+        res.json({
+            success: true,
+            connections: result.rows
+        });
+    } catch (err) {
+        console.error('Error fetching connections:', err);
+        res.status(500).json({ error: 'Failed to fetch connections' });
+    }
+});
+
+// GET /connections/enabled - List only enabled (authenticated) connections
+router.get('/enabled', requireAuth, async (req, res) => {
+    try {
+        const result = await query(`
+            SELECT 
+                c.id,
+                c.name,
+                c.display_name,
+                c.category,
+                c.auth_type,
+                c.description,
+                uc.created_at as connected_at,
+                uc.token_expires_at,
+                CASE 
+                    WHEN uc.token_expires_at IS NULL THEN true
+                    WHEN uc.token_expires_at > NOW() THEN true
+                    ELSE false
+                END as is_token_valid
+            FROM connections c
+            INNER JOIN user_connections uc ON c.id = uc.connection_id
+            WHERE uc.user_id = $1 AND uc.enabled = true
+            ORDER BY c.category, c.display_name
+        `, [req.userId]);
+
+        res.json({
+            success: true,
+            connections: result.rows
+        });
+    } catch (err) {
+        console.error('Error fetching enabled connections:', err);
+        res.status(500).json({ error: 'Failed to fetch enabled connections' });
+    }
+});
+
+// POST /connections/enable - Initiate OAuth flow or store API key
+router.post('/enable', requireAuth, async (req, res) => {
+    try {
+        const { connection_name, api_key, connection_string } = req.body;
+
+        if (!connection_name) {
+            return res.status(400).json({ error: 'connection_name is required' });
+        }
+
+        // Get connection details
+        const connResult = await query(
+            'SELECT * FROM connections WHERE name = $1',
+            [connection_name]
+        );
+
+        if (connResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Connection not found' });
+        }
+
+        const connection = connResult.rows[0];
+
+        // Handle different auth types
+        if (connection.auth_type === 'api_key') {
+            // Direct API key storage (e.g., Neon)
+            if (!api_key) {
+                return res.status(400).json({ error: 'api_key is required for this connection' });
+            }
+
+            await query(`
+                INSERT INTO user_connections (user_id, connection_id, access_token, enabled)
+                VALUES ($1, $2, $3, true)
+                ON CONFLICT (user_id, connection_id) 
+                DO UPDATE SET access_token = EXCLUDED.access_token, 
+                              enabled = true,
+                              updated_at = CURRENT_TIMESTAMP
+            `, [req.userId, connection.id, api_key]);
+
+            return res.json({
+                success: true,
+                message: 'Connection enabled successfully'
+            });
+        } 
+        else if (connection.auth_type === 'connection_string') {
+            // Direct connection string storage (e.g., Postgres)
+            if (!connection_string) {
+                return res.status(400).json({ error: 'connection_string is required for this connection' });
+            }
+
+            await query(`
+                INSERT INTO user_connections (user_id, connection_id, access_token, enabled)
+                VALUES ($1, $2, $3, true)
+                ON CONFLICT (user_id, connection_id) 
+                DO UPDATE SET access_token = EXCLUDED.access_token,
+                              enabled = true,
+                              updated_at = CURRENT_TIMESTAMP
+            `, [req.userId, connection.id, connection_string]);
+
+            return res.json({
+                success: true,
+                message: 'Connection enabled successfully'
+            });
+        }
+        else if (connection.auth_type === 'oauth2' || connection.auth_type === 'oauth1') {
+            // Generate OAuth state for CSRF protection
+            const state = crypto.randomBytes(32).toString('hex');
+            
+            // Store state in session
+            req.session.oauthState = req.session.oauthState || {};
+            req.session.oauthState[state] = {
+                connection_id: connection.id,
+                connection_name: connection.name,
+                timestamp: Date.now()
+            };
+
+            // Build OAuth authorization URL
+            const clientId = process.env[`${connection.name.toUpperCase()}_CLIENT_ID`];
+            
+            if (!clientId || clientId.startsWith('your_')) {
+                return res.status(400).json({ 
+                    error: 'OAuth not configured for this connection',
+                    message: `Please configure ${connection.name.toUpperCase()}_CLIENT_ID in .env file`
+                });
+            }
+
+            const redirectUri = `${process.env.BASE_URL}/connections/callback/${connection.name}`;
+            
+            let authUrl = connection.oauth_authorize_url;
+            const params = new URLSearchParams({
+                client_id: clientId,
+                redirect_uri: redirectUri,
+                state: state,
+                response_type: 'code'
+            });
+
+            if (connection.oauth_scopes) {
+                params.append('scope', connection.oauth_scopes);
+            }
+
+            // Service-specific OAuth parameters
+            if (connection.name === 'github') {
+                // GitHub specific
+                authUrl += `?${params.toString()}`;
+            } else if (connection.name === 'linear') {
+                params.append('prompt', 'consent');
+                authUrl += `?${params.toString()}`;
+            } else if (connection.name === 'jira' || connection.name === 'confluence') {
+                // Atlassian OAuth
+                params.append('audience', 'api.atlassian.com');
+                params.append('prompt', 'consent');
+                authUrl += `?${params.toString()}`;
+            } else if (connection.name === 'hubspot') {
+                authUrl += `?${params.toString()}`;
+            } else if (connection.name === 'asana') {
+                authUrl += `?${params.toString()}`;
+            } else if (connection.name === 'trello') {
+                // Trello OAuth 1.0a
+                const trelloParams = new URLSearchParams({
+                    key: process.env.TRELLO_API_KEY,
+                    name: 'AWS Inrix Enterprise',
+                    scope: connection.oauth_scopes,
+                    expiration: 'never',
+                    return_url: redirectUri,
+                    callback_method: 'fragment'
+                });
+                authUrl += `?${trelloParams.toString()}`;
+            } else {
+                // Generic OAuth 2.0
+                authUrl += `?${params.toString()}`;
+            }
+
+            return res.json({
+                success: true,
+                auth_required: true,
+                auth_url: authUrl,
+                message: 'Redirect user to auth_url to complete OAuth flow'
+            });
+        } else {
+            return res.status(400).json({ error: 'Unsupported auth type' });
+        }
+    } catch (err) {
+        console.error('Error enabling connection:', err);
+        res.status(500).json({ error: 'Failed to enable connection' });
+    }
+});
+
+// OAuth callback handler - handles redirects from OAuth providers
+router.get('/callback/:connection_name', requireAuth, async (req, res) => {
+    try {
+        const { connection_name } = req.params;
+        const { code, state, error, error_description } = req.query;
+
+        // Check for OAuth errors
+        if (error) {
+            console.error('OAuth error:', error, error_description);
+            return res.redirect(`/?error=${encodeURIComponent(error_description || error)}`);
+        }
+
+        // Verify state to prevent CSRF
+        if (!state || !req.session.oauthState || !req.session.oauthState[state]) {
+            return res.status(400).json({ error: 'Invalid OAuth state' });
+        }
+
+        const stateData = req.session.oauthState[state];
+        delete req.session.oauthState[state]; // Use state only once
+
+        // Verify connection matches
+        if (stateData.connection_name !== connection_name) {
+            return res.status(400).json({ error: 'Connection name mismatch' });
+        }
+
+        // Get connection details
+        const connResult = await query(
+            'SELECT * FROM connections WHERE name = $1',
+            [connection_name]
+        );
+
+        if (connResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Connection not found' });
+        }
+
+        const connection = connResult.rows[0];
+
+        // Exchange authorization code for access token
+        const clientId = process.env[`${connection.name.toUpperCase()}_CLIENT_ID`];
+        const clientSecret = process.env[`${connection.name.toUpperCase()}_CLIENT_SECRET`];
+        const redirectUri = `${process.env.BASE_URL}/connections/callback/${connection.name}`;
+
+        let tokenResponse;
+
+        if (connection.name === 'trello') {
+            // Trello returns token directly in URL fragment, not in query params
+            // For Trello, we'll handle it differently on the frontend
+            const token = req.query.token;
+            if (!token) {
+                return res.status(400).json({ error: 'No token received from Trello' });
+            }
+
+            await query(`
+                INSERT INTO user_connections (user_id, connection_id, access_token, enabled)
+                VALUES ($1, $2, $3, true)
+                ON CONFLICT (user_id, connection_id) 
+                DO UPDATE SET access_token = EXCLUDED.access_token,
+                              enabled = true,
+                              updated_at = CURRENT_TIMESTAMP
+            `, [req.userId, connection.id, token]);
+
+            return res.redirect('/?connection_success=trello');
+        } else {
+            // Standard OAuth 2.0 token exchange
+            const tokenData = {
+                grant_type: 'authorization_code',
+                code: code,
+                redirect_uri: redirectUri,
+                client_id: clientId,
+                client_secret: clientSecret
+            };
+
+            try {
+                tokenResponse = await axios.post(
+                    connection.oauth_token_url,
+                    new URLSearchParams(tokenData),
+                    {
+                        headers: {
+                            'Content-Type': 'application/x-www-form-urlencoded',
+                            'Accept': 'application/json'
+                        }
+                    }
+                );
+            } catch (err) {
+                console.error('Token exchange error:', err.response?.data || err.message);
+                return res.redirect(`/?error=${encodeURIComponent('Failed to exchange OAuth code')}`);
+            }
+
+            const { access_token, refresh_token, expires_in } = tokenResponse.data;
+
+            if (!access_token) {
+                console.error('No access token received:', tokenResponse.data);
+                return res.redirect(`/?error=${encodeURIComponent('No access token received')}`);
+            }
+
+            // Calculate token expiration
+            const expiresAt = expires_in 
+                ? new Date(Date.now() + expires_in * 1000) 
+                : null;
+
+            // Store tokens in database
+            await query(`
+                INSERT INTO user_connections (
+                    user_id, connection_id, access_token, refresh_token, 
+                    token_expires_at, enabled
+                )
+                VALUES ($1, $2, $3, $4, $5, true)
+                ON CONFLICT (user_id, connection_id) 
+                DO UPDATE SET 
+                    access_token = EXCLUDED.access_token,
+                    refresh_token = EXCLUDED.refresh_token,
+                    token_expires_at = EXCLUDED.token_expires_at,
+                    enabled = true,
+                    updated_at = CURRENT_TIMESTAMP
+            `, [req.userId, connection.id, access_token, refresh_token, expiresAt]);
+
+            return res.redirect(`/?connection_success=${connection.name}`);
+        }
+    } catch (err) {
+        console.error('OAuth callback error:', err);
+        res.redirect(`/?error=${encodeURIComponent('OAuth callback failed')}`);
+    }
+});
+
+// DELETE /connections/disable - Disable a connection
+router.delete('/disable/:connection_name', requireAuth, async (req, res) => {
+    try {
+        const { connection_name } = req.params;
+
+        const result = await query(`
+            UPDATE user_connections uc
+            SET enabled = false, updated_at = CURRENT_TIMESTAMP
+            FROM connections c
+            WHERE uc.connection_id = c.id
+            AND c.name = $1
+            AND uc.user_id = $2
+            RETURNING uc.id
+        `, [connection_name, req.userId]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Connection not found or not enabled' });
+        }
+
+        res.json({
+            success: true,
+            message: 'Connection disabled successfully'
+        });
+    } catch (err) {
+        console.error('Error disabling connection:', err);
+        res.status(500).json({ error: 'Failed to disable connection' });
+    }
+});
+
+// GET /connections/:connection_name/token - Get access token for a connection (for backend use)
+router.get('/:connection_name/token', requireAuth, async (req, res) => {
+    try {
+        const { connection_name } = req.params;
+
+        const result = await query(`
+            SELECT uc.access_token, uc.refresh_token, uc.token_expires_at, c.auth_type
+            FROM user_connections uc
+            INNER JOIN connections c ON uc.connection_id = c.id
+            WHERE c.name = $1 AND uc.user_id = $2 AND uc.enabled = true
+        `, [connection_name, req.userId]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Connection not found or not enabled' });
+        }
+
+        const tokenData = result.rows[0];
+
+        // Check if token is expired
+        if (tokenData.token_expires_at && new Date(tokenData.token_expires_at) < new Date()) {
+            return res.status(401).json({ 
+                error: 'Token expired',
+                needs_refresh: true 
+            });
+        }
+
+        res.json({
+            success: true,
+            access_token: tokenData.access_token,
+            auth_type: tokenData.auth_type
+        });
+    } catch (err) {
+        console.error('Error fetching token:', err);
+        res.status(500).json({ error: 'Failed to fetch token' });
+    }
+});
+
+module.exports = router;
